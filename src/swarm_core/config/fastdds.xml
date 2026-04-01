@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<profiles xmlns="http://eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <transport_descriptors>
+        <transport_descriptor>
+            <transport_id>shm_transport</transport_id>
+            <type>SHM</type>
+            <segment_size>16777216</segment_size>
+        </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="zero_copy_participant" is_default_profile="true">
+        <rtps>
+            <useBuiltinTransports>false</useBuiltinTransports>
+            <userTransports><transport_id>shm_transport</transport_id></userTransports>
+        </rtps>
+    </participant>
+    <data_writer profile_name="zero_copy_writer" is_default_profile="true">
+        <historyMemoryPolicy>PREALLOCATED_WITH_REALLOC</historyMemoryPolicy>
+        <qos>
+            <publishMode><kind>ASYNCHRONOUS</kind></publishMode>
+            <resourceLimits><max_samples>10</max_samples><allocated_samples>10</allocated_samples></resourceLimits>
+        </qos>
+    </data_writer>
+    <data_reader profile_name="zero_copy_reader" is_default_profile="true">
+        <historyMemoryPolicy>PREALLOCATED_WITH_REALLOC</historyMemoryPolicy>
+        <qos>
+            <resourceLimits><max_samples>10</max_samples><allocated_samples>10</allocated_samples></resourceLimits>
+        </qos>
+    </data_reader>
+</profiles>
