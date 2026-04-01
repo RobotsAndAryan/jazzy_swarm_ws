@@ -11,10 +11,11 @@
 #include <linux/videodev2.h>
 #include <cuda_runtime.h>
 
-// OpenCV CUDA Headers
 #include <opencv2/opencv.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudawarping.hpp>
+#ifdef __aarch64__
+  #include <opencv2/cudaimgproc.hpp>
+  #include <opencv2/cudawarping.hpp>
+#endif
 
 #include "rclcpp/rclcpp.hpp"
 #include "swarm_interfaces/msg/zero_copy_frame.hpp"
@@ -33,7 +34,7 @@ public:
         pub_ = this->create_publisher<swarm_interfaces::msg::ZeroCopyFrame>("/swarm/vision/raw", qos_profile);
         init_v4l2("/dev/video0", 640, 480);
         timer_ = this->create_wall_timer(33ms, std::bind(&CameraNode::capture, this));
-        RCLCPP_INFO(this->get_logger(), "CUDA Vision Math Node Initialized.");
+        RCLCPP_INFO(this->get_logger(), "Hardware-Agnostic Vision Node Initialized.");
     }
 
     ~CameraNode()
@@ -94,35 +95,27 @@ private:
             
             size_t copy_size = (buffer_length_ > 614400) ? 614400 : buffer_length_;
             std::memcpy(msg.data.data(), buffer_start_, copy_size);
-
-            void* gpu_pointer = nullptr;
             
 #ifdef __aarch64__
-            // JETSON ORIN NANO
+            // --- JETSON EDGE PIPELINE (CUDA GPU) ---
+            void* gpu_pointer = nullptr;
             cudaHostRegister(msg.data.data(), copy_size, cudaHostRegisterMapped);
             cudaHostGetDevicePointer(&gpu_pointer, msg.data.data(), 0);
+            
             cv::cuda::GpuMat gpu_raw(height_, width_, CV_8UC2, gpu_pointer);
-#else
-            // MSI KATANA PC
-            cudaMalloc(&gpu_pointer, copy_size);
-            cudaMemcpy(gpu_pointer, msg.data.data(), copy_size, cudaMemcpyHostToDevice);
-            cv::cuda::GpuMat gpu_raw(height_, width_, CV_8UC2, gpu_pointer);
-#endif
-
-            // --- THE VISION MATHEMATICS ---
-            cv::cuda::GpuMat gpu_gray;
+            cv::cuda::GpuMat gpu_gray, gpu_edges;
+            
             cv::cuda::cvtColor(gpu_raw, gpu_gray, cv::COLOR_YUV2GRAY_YUY2);
-            
-            // Initialize Smart Pointer for Canny Edge Detection
-            cv::cuda::GpuMat gpu_edges;
             cv::Ptr<cv::cuda::CannyEdgeDetector> canny = cv::cuda::createCannyEdgeDetector(50.0, 100.0);
-            
-            // Execute across the SIMD cores
             canny->detect(gpu_gray, gpu_edges);
-
-#ifndef __aarch64__
-            // Free the discrete Katana VRAM
-            cudaFree(gpu_pointer);
+#else
+            // --- KATANA PC PIPELINE (CPU FALLBACK) ---
+            // Wraps the pre-allocated Fast DDS memory in a CPU cv::Mat. Zero copies.
+            cv::Mat cpu_raw(height_, width_, CV_8UC2, msg.data.data());
+            cv::Mat cpu_gray, cpu_edges;
+            
+            cv::cvtColor(cpu_raw, cpu_gray, cv::COLOR_YUV2GRAY_YUY2);
+            cv::Canny(cpu_gray, cpu_edges, 50.0, 100.0);
 #endif
 
             pub_->publish(std::move(loaned_msg));
