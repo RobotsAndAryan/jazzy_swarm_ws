@@ -4,7 +4,10 @@ FROM osrf/ros:jazzy-desktop
 ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Added build-essential and libc6-dev to supply the POSIX <sys/mmap.h> headers
 RUN apt-get update && apt-get install -y \
+    build-essential \
+    libc6-dev \
     v4l-utils \
     htop \
     iproute2 \

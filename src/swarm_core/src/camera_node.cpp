@@ -7,10 +7,10 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
-#include <sys/mmap.h>
+#include <sys/mman.h>
 #include <linux/videodev2.h>
 #include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/image.hpp"
+#include "swarm_interfaces/msg/zero_copy_frame.hpp"
 
 using namespace std::chrono_literals;
 
@@ -23,10 +23,10 @@ public:
         qos_profile.best_effort();
         qos_profile.durability_volatile();
 
-        pub_ = this->create_publisher<sensor_msgs::msg::Image>("/swarm/vision/raw", qos_profile);
+        pub_ = this->create_publisher<swarm_interfaces::msg::ZeroCopyFrame>("/swarm/vision/raw", qos_profile);
         init_v4l2("/dev/video0", 640, 480);
         timer_ = this->create_wall_timer(33ms, std::bind(&CameraNode::capture, this));
-        RCLCPP_INFO(this->get_logger(), "Zero-Copy Camera (V4L2 -> SHM) Initialized.");
+        RCLCPP_INFO(this->get_logger(), "Zero-Copy Camera (V4L2 -> SHM POD) Initialized.");
     }
 
     ~CameraNode()
@@ -65,6 +65,11 @@ private:
         if (ioctl(fd_, VIDIOC_QUERYBUF, &buf) == -1) throw std::runtime_error("FATAL: QUERYBUF error");
 
         buffer_length_ = buf.length;
+        // Verify kernel gave us the expected 614400 bytes
+        if (buffer_length_ != 614400) {
+            RCLCPP_WARN(this->get_logger(), "Kernel buffer size mismatch. Expected 614400, got %zu", buffer_length_);
+        }
+
         buffer_start_ = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, buf.m.offset);
         if (buffer_start_ == MAP_FAILED) throw std::runtime_error("FATAL: mmap() failed");
 
@@ -82,22 +87,22 @@ private:
         auto loaned_msg = pub_->borrow_loaned_message();
         if (loaned_msg.is_valid()) {
             auto& msg = loaned_msg.get();
-            msg.header.stamp = this->now();
-            msg.header.frame_id = "camera_link";
-            msg.height = height_; msg.width = width_;
-            msg.encoding = "yuv422_yuy2";
-            msg.is_bigendian = 0; msg.step = width_ * 2;
-            msg.data.resize(buffer_length_);
+            msg.timestamp = this->now().nanoseconds();
+            msg.width = width_; 
+            msg.height = height_;
             
-            // Bypass user-space heap. Copy directly to mapped SHM.
-            std::memcpy(msg.data.data(), buffer_start_, buffer_length_);
+            // True Zero-Copy. Directly moving the POSIX map into the SHM pointer.
+            size_t copy_size = (buffer_length_ > 614400) ? 614400 : buffer_length_;
+            std::memcpy(msg.data.data(), buffer_start_, copy_size);
             pub_->publish(std::move(loaned_msg));
+        } else {
+             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "SHM pool exhausted.");
         }
 
         ioctl(fd_, VIDIOC_QBUF, &buf);
     }
 
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_;
+    rclcpp::Publisher<swarm_interfaces::msg::ZeroCopyFrame>::SharedPtr pub_;
     rclcpp::TimerBase::SharedPtr timer_;
 };
 

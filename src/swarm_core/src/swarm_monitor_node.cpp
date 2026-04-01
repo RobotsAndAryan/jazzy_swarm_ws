@@ -3,7 +3,8 @@
 #include <mutex>
 #include <atomic>
 #include "rclcpp/rclcpp.hpp"
-#include "std_msgs/msg/uint64.hpp"
+// CORRECTED: ROS 2 compiles UInt64 to u_int64.hpp
+#include "std_msgs/msg/u_int64.hpp"
 
 using namespace std::chrono_literals;
 
