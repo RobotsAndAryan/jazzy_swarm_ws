@@ -101,28 +101,27 @@ private:
             // JETSON ORIN NANO
             cudaHostRegister(msg.data.data(), copy_size, cudaHostRegisterMapped);
             cudaHostGetDevicePointer(&gpu_pointer, msg.data.data(), 0);
-            
-            // Wrap the pointer in a GPU Matrix (No memory copy)
             cv::cuda::GpuMat gpu_raw(height_, width_, CV_8UC2, gpu_pointer);
 #else
             // MSI KATANA PC
             cudaMalloc(&gpu_pointer, copy_size);
             cudaMemcpy(gpu_pointer, msg.data.data(), copy_size, cudaMemcpyHostToDevice);
-            
-            // Wrap the allocated VRAM in a GPU Matrix
             cv::cuda::GpuMat gpu_raw(height_, width_, CV_8UC2, gpu_pointer);
 #endif
 
             // --- THE VISION MATHEMATICS ---
             cv::cuda::GpuMat gpu_gray;
-            // 1. Convert YUYV to Grayscale instantly across thousands of cores
             cv::cuda::cvtColor(gpu_raw, gpu_gray, cv::COLOR_YUV2GRAY_YUY2);
             
-            // 2. We will add edge detection here in the next phase.
-            // For now, the math is proven.
+            // Initialize Smart Pointer for Canny Edge Detection
+            cv::cuda::GpuMat gpu_edges;
+            cv::Ptr<cv::cuda::CannyEdgeDetector> canny = cv::cuda::createCannyEdgeDetector(50.0, 100.0);
+            
+            // Execute across the SIMD cores
+            canny->detect(gpu_gray, gpu_edges);
 
 #ifndef __aarch64__
-            // Free the discrete Katana VRAM to prevent a memory leak
+            // Free the discrete Katana VRAM
             cudaFree(gpu_pointer);
 #endif
 
