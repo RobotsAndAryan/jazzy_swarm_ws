@@ -29,6 +29,10 @@ target_include_directories(supervisor_node PUBLIC ${OpenCV_INCLUDE_DIRS})
 ament_target_dependencies(supervisor_node rclcpp swarm_interfaces geometry_msgs)
 target_link_libraries(supervisor_node ${OpenCV_LIBS})
 
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
+)
+
 install(TARGETS
   core_bridge_node
   swarm_monitor_node
