@@ -25,7 +25,9 @@ ament_target_dependencies(camera_node rclcpp swarm_interfaces)
 target_link_libraries(camera_node CUDA::cudart ${OpenCV_LIBS})
 
 add_executable(supervisor_node src/supervisor_node.cpp)
+target_include_directories(supervisor_node PUBLIC ${OpenCV_INCLUDE_DIRS})
 ament_target_dependencies(supervisor_node rclcpp swarm_interfaces geometry_msgs)
+target_link_libraries(supervisor_node ${OpenCV_LIBS})
 
 install(TARGETS
   core_bridge_node
