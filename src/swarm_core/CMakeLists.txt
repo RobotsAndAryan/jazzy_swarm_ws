@@ -24,18 +24,14 @@ target_include_directories(camera_node PUBLIC ${OpenCV_INCLUDE_DIRS})
 ament_target_dependencies(camera_node rclcpp swarm_interfaces)
 target_link_libraries(camera_node CUDA::cudart ${OpenCV_LIBS})
 
+add_executable(supervisor_node src/supervisor_node.cpp)
+target_include_directories(supervisor_node PUBLIC ${OpenCV_INCLUDE_DIRS})
+ament_target_dependencies(supervisor_node rclcpp swarm_interfaces geometry_msgs)
+target_link_libraries(supervisor_node ${OpenCV_LIBS})
+
+# --- THE NEW HIVE MIND NODE ---
 add_executable(boids_node src/boids_node.cpp)
 ament_target_dependencies(boids_node rclcpp geometry_msgs)
-
-add_executable(supervisor_node
-  boids_node src/supervisor_node
-  boids_node.cpp)
-target_include_directories(supervisor_node
-  boids_node PUBLIC ${OpenCV_INCLUDE_DIRS})
-ament_target_dependencies(supervisor_node
-  boids_node rclcpp swarm_interfaces geometry_msgs)
-target_link_libraries(supervisor_node
-  boids_node ${OpenCV_LIBS})
 
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
