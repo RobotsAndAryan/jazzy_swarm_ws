@@ -2,6 +2,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <cmath>
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -34,25 +35,75 @@ private:
     void calculate_swarm_math() {
         if (!self_odom_) return;
 
-        auto cmd = geometry_msgs::msg::Twist();
         double sep_x = 0, sep_y = 0;
+        double avg_vel_x = 0, avg_vel_y = 0;
+        double center_x = 0, center_y = 0;
+        int flock_count = 0;
 
+        // 1. Radar Sweep
         for (auto const& [name, odom] : neighbor_odom_) {
-            if (!odom) continue; // THE FIX: Pro-level memory safety
+            if (!odom) continue;
 
             double dx = self_odom_->pose.pose.position.x - odom->pose.pose.position.x;
             double dy = self_odom_->pose.pose.position.y - odom->pose.pose.position.y;
             double dist_sq = dx*dx + dy*dy;
 
-            // THE FIX: Expanded sensory radius to 5.0 (approx 2.23m) so spawn positions trigger it
-            if (dist_sq < 5.0 && dist_sq > 0.01) { 
-                sep_x += (dx / dist_sq) * 1.5; 
-                sep_y += (dy / dist_sq) * 1.5;
+            if (dist_sq < 25.0 && dist_sq > 0.01) { // 5.0m perception radius
+                
+                // Rule 1: Separation (Inverse Square - tight radius)
+                if (dist_sq < 4.0) { 
+                    sep_x += (dx / dist_sq); 
+                    sep_y += (dy / dist_sq);
+                }
+
+                // Gather data for Alignment and Cohesion
+                avg_vel_x += odom->twist.twist.linear.x;
+                avg_vel_y += odom->twist.twist.linear.y;
+                center_x += odom->pose.pose.position.x;
+                center_y += odom->pose.pose.position.y;
+                flock_count++;
             }
         }
 
-        cmd.linear.x = sep_x;
-        cmd.linear.y = sep_y;
+        double align_x = 0, align_y = 0;
+        double coh_x = 0, coh_y = 0;
+
+        if (flock_count > 0) {
+            // Rule 2: Alignment (Match Velocity)
+            avg_vel_x /= flock_count;
+            avg_vel_y /= flock_count;
+            align_x = avg_vel_x - self_odom_->twist.twist.linear.x;
+            align_y = avg_vel_y - self_odom_->twist.twist.linear.y;
+
+            // Rule 3: Cohesion (Steer to Center of Mass)
+            center_x /= flock_count;
+            center_y /= flock_count;
+            coh_x = center_x - self_odom_->pose.pose.position.x;
+            coh_y = center_y - self_odom_->pose.pose.position.y;
+        }
+
+        // Rule 4: The Patrol Mission (Fly East)
+        double mig_x = 1.0; 
+        double mig_y = 0.0;
+
+        // The Defense-Grade Weight Multipliers
+        double w_sep = 2.5; 
+        double w_ali = 1.0; 
+        double w_coh = 0.5; 
+        double w_mig = 1.5;
+
+        auto cmd = geometry_msgs::msg::Twist();
+        cmd.linear.x = (sep_x * w_sep) + (align_x * w_ali) + (coh_x * w_coh) + (mig_x * w_mig);
+        cmd.linear.y = (sep_y * w_sep) + (align_y * w_ali) + (coh_y * w_coh) + (mig_y * w_mig);
+
+        // The Governor: Clamp to physical limits
+        double max_speed = 2.0;
+        double speed = std::sqrt(cmd.linear.x*cmd.linear.x + cmd.linear.y*cmd.linear.y);
+        if (speed > max_speed) {
+            cmd.linear.x = (cmd.linear.x / speed) * max_speed;
+            cmd.linear.y = (cmd.linear.y / speed) * max_speed;
+        }
+
         pub_->publish(cmd);
     }
 
