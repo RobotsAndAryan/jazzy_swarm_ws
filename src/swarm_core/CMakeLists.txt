@@ -46,4 +46,11 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# Install Launch and URDF directories
+install(DIRECTORY
+  launch
+  urdf
+  DESTINATION share/${PROJECT_NAME}
+)
+
 ament_package()
