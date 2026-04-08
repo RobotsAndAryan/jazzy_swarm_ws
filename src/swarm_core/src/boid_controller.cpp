@@ -19,7 +19,6 @@ public:
 
         pub_ = this->create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
         
-        // LiDAR Sub
         sub_scan_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
             "scan", 10, std::bind(&HiveMindController::scan_callback, this, _1));
 
@@ -33,6 +32,14 @@ public:
                     "/" + name + "/odom", 10, [this, name](nav_msgs::msg::Odometry::SharedPtr msg){ neighbor_odom_[name] = msg; });
             }
         }
+
+        // EPIC 5: The Flight Plan (Stratford Route)
+        waypoints_ = {
+            {22.0, 0.0},   // WP1: Approach the corner
+            {22.0, 15.0},  // WP2: Bank Left into the intersection
+            {-5.0, 15.0}   // WP3: Fly out the West exit
+        };
+        current_wp_idx_ = 0;
 
         timer_ = this->create_wall_timer(50ms, std::bind(&HiveMindController::calculate_swarm_math, this));
     }
@@ -50,7 +57,6 @@ private:
         double center_x = 0, center_y = 0;
         int flock_count = 0;
 
-        // 1. Swarm Radar Sweep
         for (auto const& [name, odom] : neighbor_odom_) {
             if (!odom) continue;
             double dx = self_odom_->pose.pose.position.x - odom->pose.pose.position.x;
@@ -70,31 +76,53 @@ private:
             avg_vel_x /= flock_count; avg_vel_y /= flock_count;
             align_x = avg_vel_x - self_odom_->twist.twist.linear.x;
             align_y = avg_vel_y - self_odom_->twist.twist.linear.y;
-
             center_x /= flock_count; center_y /= flock_count;
             coh_x = center_x - self_odom_->pose.pose.position.x;
             coh_y = center_y - self_odom_->pose.pose.position.y;
         }
 
-        // 2. The Spatial Reflex (LiDAR Obstacle Avoidance)
         double obs_x = 0, obs_y = 0;
         if (latest_scan_) {
+            if (filtered_ranges_.empty()) filtered_ranges_.resize(latest_scan_->ranges.size(), 20.0);
+            double alpha = 0.2; 
             for (size_t i = 0; i < latest_scan_->ranges.size(); ++i) {
-                double range = latest_scan_->ranges[i];
-                if (range > latest_scan_->range_min && range < 2.5) { // 2.5m panic radius
+                double raw_range = latest_scan_->ranges[i];
+                if (std::isinf(raw_range) || raw_range > latest_scan_->range_max) raw_range = 20.0; 
+                filtered_ranges_[i] = (alpha * raw_range) + ((1.0 - alpha) * filtered_ranges_[i]);
+
+                if (filtered_ranges_[i] > latest_scan_->range_min && filtered_ranges_[i] < 10.0) { 
                     double angle = latest_scan_->angle_min + i * latest_scan_->angle_increment;
-                    // Inverse-square push away from the specific laser angle
-                    obs_x -= (1.0 / (range * range)) * std::cos(angle);
-                    obs_y -= (1.0 / (range * range)) * std::sin(angle);
+                    obs_x -= (1.0 / (filtered_ranges_[i] * filtered_ranges_[i])) * std::cos(angle);
+                    obs_y -= (1.0 / (filtered_ranges_[i] * filtered_ranges_[i])) * std::sin(angle);
                 }
             }
         }
 
-        // Rule 4: The Patrol Mission (Fly East)
-        double mig_x = 1.0; double mig_y = 0.0;
+        // EPIC 5: Dynamic Navigation Vector
+        double mig_x = 0.0, mig_y = 0.0;
+        if (current_wp_idx_ < waypoints_.size()) {
+            double target_x = waypoints_[current_wp_idx_].first;
+            double target_y = waypoints_[current_wp_idx_].second;
+            
+            double dx = target_x - self_odom_->pose.pose.position.x;
+            double dy = target_y - self_odom_->pose.pose.position.y;
+            double dist_to_wp = std::sqrt(dx*dx + dy*dy);
+            
+            // If within 2 meters of waypoint, switch to next waypoint
+            if (dist_to_wp < 2.0) {
+                current_wp_idx_++;
+                RCLCPP_INFO(this->get_logger(), "Waypoint reached! Proceeding to next.");
+            } else {
+                // Normalize the vector so they don't fly at Mach 10
+                mig_x = dx / dist_to_wp; 
+                mig_y = dy / dist_to_wp;
+            }
+        } else {
+            // Mission Complete: Hover in place
+            mig_x = 0.0; mig_y = 0.0;
+        }
 
-        // Weights: Obstacle avoidance heavily overpowers everything
-        double w_sep = 5.0, w_ali = 1.0, w_coh = 0.25, w_mig = 1.5, w_obs = 5.0;
+        double w_sep = 5.0, w_ali = 1.0, w_coh = 0.25, w_mig = 2.0, w_obs = 5.0;
 
         auto cmd = geometry_msgs::msg::Twist();
         cmd.linear.x = (sep_x * w_sep) + (align_x * w_ali) + (coh_x * w_coh) + (mig_x * w_mig) + (obs_x * w_obs);
@@ -113,12 +141,17 @@ private:
     std::string self_name_;
     nav_msgs::msg::Odometry::SharedPtr self_odom_;
     sensor_msgs::msg::LaserScan::SharedPtr latest_scan_;
+    std::vector<double> filtered_ranges_;
     std::map<std::string, nav_msgs::msg::Odometry::SharedPtr> neighbor_odom_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_self_;
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_scan_;
     std::map<std::string, rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr> subs_neighbors_;
     rclcpp::TimerBase::SharedPtr timer_;
+    
+    // Waypoint Variables
+    std::vector<std::pair<double, double>> waypoints_;
+    size_t current_wp_idx_;
 };
 
 int main(int argc, char ** argv) {
