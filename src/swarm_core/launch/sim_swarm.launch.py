@@ -10,7 +10,7 @@ def generate_launch_description():
     pkg_swarm_core = get_package_share_directory('swarm_core')
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
 
-    world_file = os.path.join(pkg_swarm_core, 'worlds', 'swarm_world.sdf')
+    world_file = os.path.join(pkg_swarm_core, 'worlds', 'stratford_olympic_park.sdf')
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')),
         launch_arguments={'gz_args': f'-r {world_file}'}.items(),

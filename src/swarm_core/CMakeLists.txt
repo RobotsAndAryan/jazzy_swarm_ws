@@ -25,7 +25,7 @@ ament_target_dependencies(visual_cortex rclcpp sensor_msgs cv_bridge)
 target_link_libraries(visual_cortex ${OpenCV_LIBRARIES}) 
 
 # 3. Installation Pipeline
-install(DIRECTORY launch urdf worlds DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY launch urdf worlds rviz DESTINATION share/${PROJECT_NAME})
 install(TARGETS boid_controller visual_cortex DESTINATION lib/${PROJECT_NAME})
 
 ament_package()
