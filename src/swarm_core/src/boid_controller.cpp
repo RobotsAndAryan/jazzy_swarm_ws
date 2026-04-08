@@ -33,11 +33,13 @@ public:
             }
         }
 
-        // EPIC 5: The Flight Plan (Stratford Route)
+        // EPIC 5: The Centered Racing Line (Safe from the Forcefield)
         waypoints_ = {
-            {22.0, 0.0},   // WP1: Approach the corner
-            {22.0, 15.0},  // WP2: Bank Left into the intersection
-            {-5.0, 15.0}   // WP3: Fly out the West exit
+            {18.0, 0.0},   // WP1: Approach
+            {22.0, 0.0},   // WP2: Dead Center of Intersection
+            {22.0, 3.0},   // WP3: Clear the Corner Apex
+            {22.0, 8.0},   // WP4: Straighten Out in the New Alley
+            {22.0, 15.0}   // WP5: Exit Phase
         };
         current_wp_idx_ = 0;
 
@@ -98,7 +100,6 @@ private:
             }
         }
 
-        // EPIC 5: Dynamic Navigation Vector
         double mig_x = 0.0, mig_y = 0.0;
         if (current_wp_idx_ < waypoints_.size()) {
             double target_x = waypoints_[current_wp_idx_].first;
@@ -108,21 +109,16 @@ private:
             double dy = target_y - self_odom_->pose.pose.position.y;
             double dist_to_wp = std::sqrt(dx*dx + dy*dy);
             
-            // If within 2 meters of waypoint, switch to next waypoint
             if (dist_to_wp < 2.0) {
                 current_wp_idx_++;
-                RCLCPP_INFO(this->get_logger(), "Waypoint reached! Proceeding to next.");
+                RCLCPP_INFO(this->get_logger(), "Waypoint Cleared!");
             } else {
-                // Normalize the vector so they don't fly at Mach 10
                 mig_x = dx / dist_to_wp; 
                 mig_y = dy / dist_to_wp;
             }
-        } else {
-            // Mission Complete: Hover in place
-            mig_x = 0.0; mig_y = 0.0;
         }
 
-        double w_sep = 5.0, w_ali = 1.0, w_coh = 0.25, w_mig = 2.0, w_obs = 5.0;
+        double w_sep = 3.0, w_ali = 0.5, w_coh = 0.05, w_mig = 3.0, w_obs = 5.0;
 
         auto cmd = geometry_msgs::msg::Twist();
         cmd.linear.x = (sep_x * w_sep) + (align_x * w_ali) + (coh_x * w_coh) + (mig_x * w_mig) + (obs_x * w_obs);
@@ -148,8 +144,6 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_scan_;
     std::map<std::string, rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr> subs_neighbors_;
     rclcpp::TimerBase::SharedPtr timer_;
-    
-    // Waypoint Variables
     std::vector<std::pair<double, double>> waypoints_;
     size_t current_wp_idx_;
 };
