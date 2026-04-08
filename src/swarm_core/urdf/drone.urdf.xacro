@@ -94,4 +94,12 @@
     </plugin>
   </gazebo>
 
+  
+  <gazebo reference="base_link">
+    <sensor name="gps_sensor" type="navsat">
+      <always_on>1</always_on>
+      <update_rate>10.0</update_rate>
+      <topic>/model/alpha/navsat</topic>
+    </sensor>
+  </gazebo>
 </robot>
