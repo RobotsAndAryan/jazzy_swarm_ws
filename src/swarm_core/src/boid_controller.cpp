@@ -18,7 +18,6 @@ public:
         self_name_ = this->get_parameter("drone_name").as_string();
 
         pub_ = this->create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
-        
         sub_scan_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
             "scan", 10, std::bind(&HiveMindController::scan_callback, this, _1));
 
@@ -33,17 +32,12 @@ public:
             }
         }
 
-        // EPIC 5: The Centered Racing Line (Safe from the Forcefield)
         waypoints_ = {
-            {18.0, 0.0},   // WP1: Approach
-            {22.0, 0.0},   // WP2: Dead Center of Intersection
-            {22.0, 3.0},   // WP3: Clear the Corner Apex
-            {22.0, 8.0},   // WP4: Straighten Out in the New Alley
-            {22.0, 15.0}   // WP5: Exit Phase
+            {18.0, 0.0}, {22.0, 0.0}, {22.0, 3.0}, {22.0, 8.0}, {22.0, 15.0}
         };
         current_wp_idx_ = 0;
 
-        timer_ = this->create_wall_timer(50ms, std::bind(&HiveMindController::calculate_swarm_math, this));
+        timer_ = this->create_wall_timer(50ms, std::bind(&HiveMindController::calculate_vfh_math, this));
     }
 
 private:
@@ -51,55 +45,42 @@ private:
         latest_scan_ = msg;
     }
 
-    void calculate_swarm_math() {
-        if (!self_odom_) return;
+    void calculate_vfh_math() {
+        if (!self_odom_ || !latest_scan_) return;
 
+        // 1. Separation (Don't crash into each other)
         double sep_x = 0, sep_y = 0;
-        double avg_vel_x = 0, avg_vel_y = 0;
-        double center_x = 0, center_y = 0;
-        int flock_count = 0;
-
         for (auto const& [name, odom] : neighbor_odom_) {
             if (!odom) continue;
             double dx = self_odom_->pose.pose.position.x - odom->pose.pose.position.x;
             double dy = self_odom_->pose.pose.position.y - odom->pose.pose.position.y;
             double dist_sq = dx*dx + dy*dy;
-
-            if (dist_sq < 25.0 && dist_sq > 0.01) {
-                if (dist_sq < 4.0) { sep_x += (dx / dist_sq); sep_y += (dy / dist_sq); }
-                avg_vel_x += odom->twist.twist.linear.x; avg_vel_y += odom->twist.twist.linear.y;
-                center_x += odom->pose.pose.position.x; center_y += odom->pose.pose.position.y;
-                flock_count++;
+            if (dist_sq < 4.0 && dist_sq > 0.01) { 
+                sep_x += (dx / dist_sq); sep_y += (dy / dist_sq); 
             }
         }
 
-        double align_x = 0, align_y = 0, coh_x = 0, coh_y = 0;
-        if (flock_count > 0) {
-            avg_vel_x /= flock_count; avg_vel_y /= flock_count;
-            align_x = avg_vel_x - self_odom_->twist.twist.linear.x;
-            align_y = avg_vel_y - self_odom_->twist.twist.linear.y;
-            center_x /= flock_count; center_y /= flock_count;
-            coh_x = center_x - self_odom_->pose.pose.position.x;
-            coh_y = center_y - self_odom_->pose.pose.position.y;
-        }
+        // 2. VFH Histogram Setup (36 bins, 10 degrees each)
+        int num_bins = 36;
+        std::vector<bool> blocked_bins(num_bins, false);
+        double safe_distance = 1.2; // Avoid walls within 2.5m
 
-        double obs_x = 0, obs_y = 0;
-        if (latest_scan_) {
-            if (filtered_ranges_.empty()) filtered_ranges_.resize(latest_scan_->ranges.size(), 20.0);
-            double alpha = 0.2; 
-            for (size_t i = 0; i < latest_scan_->ranges.size(); ++i) {
-                double raw_range = latest_scan_->ranges[i];
-                if (std::isinf(raw_range) || raw_range > latest_scan_->range_max) raw_range = 20.0; 
-                filtered_ranges_[i] = (alpha * raw_range) + ((1.0 - alpha) * filtered_ranges_[i]);
+        for (size_t i = 0; i < latest_scan_->ranges.size(); ++i) {
+            double r = latest_scan_->ranges[i];
+            if (std::isinf(r) || r > latest_scan_->range_max) r = 20.0;
 
-                if (filtered_ranges_[i] > latest_scan_->range_min && filtered_ranges_[i] < 10.0) { 
-                    double angle = latest_scan_->angle_min + i * latest_scan_->angle_increment;
-                    obs_x -= (1.0 / (filtered_ranges_[i] * filtered_ranges_[i])) * std::cos(angle);
-                    obs_y -= (1.0 / (filtered_ranges_[i] * filtered_ranges_[i])) * std::sin(angle);
-                }
+            if (r < safe_distance) {
+                double angle = latest_scan_->angle_min + i * latest_scan_->angle_increment;
+                // Normalize angle to 0 - 2PI
+                while (angle < 0) angle += 2 * M_PI;
+                while (angle >= 2 * M_PI) angle -= 2 * M_PI;
+                
+                int bin_idx = static_cast<int>((angle / (2 * M_PI)) * num_bins) % num_bins;
+                blocked_bins[bin_idx] = true;
             }
         }
 
+        // 3. Waypoint Targeting
         double mig_x = 0.0, mig_y = 0.0;
         if (current_wp_idx_ < waypoints_.size()) {
             double target_x = waypoints_[current_wp_idx_].first;
@@ -111,18 +92,39 @@ private:
             
             if (dist_to_wp < 2.0) {
                 current_wp_idx_++;
-                RCLCPP_INFO(this->get_logger(), "Waypoint Cleared!");
+                RCLCPP_INFO(this->get_logger(), "VFH Gate Cleared!");
             } else {
-                mig_x = dx / dist_to_wp; 
-                mig_y = dy / dist_to_wp;
+                // Find Target Angle
+                double target_angle = std::atan2(dy, dx);
+                while (target_angle < 0) target_angle += 2 * M_PI;
+                int target_bin = static_cast<int>((target_angle / (2 * M_PI)) * num_bins) % num_bins;
+
+                // 4. VFH Gap Selection
+                int chosen_bin = target_bin;
+                int search_radius = 0;
+                
+                // If blocked, search left and right for nearest open gap
+                while (blocked_bins[chosen_bin] && search_radius < num_bins / 2) {
+                    search_radius++;
+                    int right_bin = (target_bin + search_radius) % num_bins;
+                    int left_bin = (target_bin - search_radius + num_bins) % num_bins;
+                    
+                    if (!blocked_bins[left_bin]) { chosen_bin = left_bin; break; }
+                    if (!blocked_bins[right_bin]) { chosen_bin = right_bin; break; }
+                }
+
+                // Convert chosen bin back to a vector
+                double chosen_angle = (chosen_bin * (2 * M_PI) / num_bins) + ((M_PI) / num_bins);
+                mig_x = std::cos(chosen_angle);
+                mig_y = std::sin(chosen_angle);
             }
         }
 
-        double w_sep = 3.0, w_ali = 0.5, w_coh = 0.05, w_mig = 3.0, w_obs = 5.0;
-
+        // 5. Final Velocity Command
+        double w_sep = 3.0, w_mig = 2.5;
         auto cmd = geometry_msgs::msg::Twist();
-        cmd.linear.x = (sep_x * w_sep) + (align_x * w_ali) + (coh_x * w_coh) + (mig_x * w_mig) + (obs_x * w_obs);
-        cmd.linear.y = (sep_y * w_sep) + (align_y * w_ali) + (coh_y * w_coh) + (mig_y * w_mig) + (obs_y * w_obs);
+        cmd.linear.x = (sep_x * w_sep) + (mig_x * w_mig);
+        cmd.linear.y = (sep_y * w_sep) + (mig_y * w_mig);
 
         double max_speed = 2.0;
         double speed = std::sqrt(cmd.linear.x*cmd.linear.x + cmd.linear.y*cmd.linear.y);
@@ -137,7 +139,6 @@ private:
     std::string self_name_;
     nav_msgs::msg::Odometry::SharedPtr self_odom_;
     sensor_msgs::msg::LaserScan::SharedPtr latest_scan_;
-    std::vector<double> filtered_ranges_;
     std::map<std::string, nav_msgs::msg::Odometry::SharedPtr> neighbor_odom_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_self_;
